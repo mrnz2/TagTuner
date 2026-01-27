@@ -27,7 +27,7 @@ jobs:
           - tagtuner-D1-custom1
           - tagtuner-atom-grove-ble
           - tagtuner-for-tagreader
-          - tagtuner-on-ha-voice
+          - tagtuner-on-ha-voice-pe
         esphome-version:
           - stable
           # - beta
