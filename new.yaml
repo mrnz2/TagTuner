@@ -1,0 +1,703 @@
+# ============================================================
+# TagTuner Full Version for ESP32-C3 SuperMini
+# ============================================================
+# Pełna wersja z obsługą:
+# - Odczyt tagów NFC (UID + NDEF)
+# - Zapis tagów NFC (URI, artysta, playlist)
+# - Enkoder obrotowy (głośność)
+# - Przycisk (single/double/triple/long click)
+# - Integracja z Home Assistant + Music Assistant
+# ============================================================
+
+substitutions:
+  # ──────────────────────────────────────────────────────────
+  # USTAWIENIA URZĄDZENIA
+  # ──────────────────────────────────────────────────────────
+  name: "tagtuner-c3"
+  friendly_name: "TagTuner C3"
+  magic: "260103"                # Wersja protokołu dla blueprint HA
+  
+  # ──────────────────────────────────────────────────────────
+  # KONFIGURACJA PINÓW - ESP32-C3 SuperMini
+  # ──────────────────────────────────────────────────────────
+  #
+  #         USB-C
+  #      ┌─────────┐
+  #      │  ┌───┐  │
+  #   5V │  │USB│  │ GND
+  #  GND │  └───┘  │ 3V3
+  #  GP4 │         │ GP2
+  #  GP5 │         │ GP3
+  #  GP6 │         │ GP10
+  #  GP7 │         │ GP9
+  #  GP8 │  (LED)  │ GP8
+  #  GP9 │         │ GP21 (TX)
+  # GP10 │         │ GP20 (RX)
+  #      └─────────┘
+  #
+  # ──────────────────────────────────────────────────────────
+  
+  # I2C - Czytnik NFC PN532
+  pin_i2c_sda: "4"              # GPIO4 - dane I2C (SDA)
+  pin_i2c_scl: "5"              # GPIO5 - zegar I2C (SCL)
+  
+  # Enkoder obrotowy HW-040
+  pin_encoder_clk: "6"          # GPIO6 - sygnał CLK (obrót)
+  pin_encoder_dt: "7"           # GPIO7 - sygnał DT (kierunek)
+  pin_encoder_sw: "3"           # GPIO3 - przycisk (switch)
+  
+  # LED sygnalizacyjny
+  pin_led: "8"                  # GPIO8 - wbudowany LED (active LOW)
+
+# ============================================================
+# KONFIGURACJA ESPHOME
+# ============================================================
+
+esphome:
+  name: "${name}"
+  friendly_name: ${friendly_name}
+  min_version: 2024.1.0
+  name_add_mac_suffix: true
+
+  project:
+    name: LukaGra.TagTuner-C3
+    version: dev
+
+  on_boot:
+    priority: -100
+    then:
+    - light.turn_on:
+        id: led1
+        effect: TagWrite
+    - delay: 1000ms
+    - light.turn_off: led1
+    - wait_until:
+        condition:
+          api.connected:
+        timeout: 20s
+    - text_sensor.template.publish:
+        id: status
+        state: "Ready"
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# ============================================================
+# ZEWNĘTRZNE KOMPONENTY
+# ============================================================
+# Zmodyfikowany PN532 do obsługi tagów 888 bajtów (NTAG216)
+
+external_components:
+  - source: github://luka6000/TagTuner@main
+    components: [ pn532 ]
+    refresh: 1min
+
+# ============================================================
+# LOGOWANIE
+# ============================================================
+
+logger:
+  level: DEBUG
+  logs:
+    light: WARN
+
+# ============================================================
+# KOMUNIKACJA I2C
+# ============================================================
+
+i2c:
+  id: bus_i2c
+  sda: ${pin_i2c_sda}
+  scl: ${pin_i2c_scl}
+  scan: False
+  frequency: 100kHz
+  timeout: 13ms
+
+# ============================================================
+# SIEĆ I API
+# ============================================================
+
+api:
+
+ota:
+  - platform: esphome
+  - platform: http_request
+    id: ota_http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    name: None
+    id: update_http_request
+    source: https://luka6000.github.io/TagTuner/firmware/manifest-tagtuner-xiao-esp32c6.json
+
+wifi:
+  ap:
+
+dashboard_import:
+  package_import_url: github://luka6000/TagTuner/tagtuner-XIAO-custom.yaml@main
+  import_full_config: false
+
+improv_serial:
+  next_url: https://luka6000.github.io/TagTuner/
+
+esp32_ble:
+  name: ${name}
+
+esp32_improv:
+  authorizer: toggle
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+
+bluetooth_proxy:
+  active: false
+
+# ============================================================
+# WEJŚCIA - Przycisk enkodera
+# ============================================================
+
+binary_sensor:
+  - platform: gpio
+    id: toggle
+    pin:
+      number: ${pin_encoder_sw}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+    # Triple click - previous track
+    - timing:
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+      then:
+        - script.execute: led_blink
+        - text_sensor.template.publish:
+            id: status
+            state: "clickTriple"
+        - script.execute:
+            id: tagtuner_event
+            action: "clickTriple"
+            uid: ""
+            uri: ""
+            artist: ""
+            playlist: ""
+    # Double click - play/pause
+    - timing:
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+        - OFF for at least 0.25s
+      then:
+        - script.execute: led_blink
+        - text_sensor.template.publish:
+            id: status
+            state: "clickDouble"
+        - script.execute:
+            id: tagtuner_event
+            action: "clickDouble"
+            uid: ""
+            uri: ""
+            artist: ""
+            playlist: ""
+    # Long click - mute/unmute
+    - timing:
+        - ON for 0.5s to 2s
+        - OFF for at least 50ms
+      then:
+        - script.execute: led_blink
+        - text_sensor.template.publish:
+            id: status
+            state: "clickLong"
+        - script.execute:
+            id: tagtuner_event
+            action: "clickLong"
+            uid: ""
+            uri: ""
+            artist: ""
+            playlist: ""
+    # Single click - next track
+    - timing:
+        - ON for at most 0.5s
+        - OFF for at least 260ms
+      then:
+        - script.execute: led_blink
+        - text_sensor.template.publish:
+            id: status
+            state: "clickSingle"
+        - script.execute:
+            id: tagtuner_event
+            action: "clickSingle"
+            uid: ""
+            uri: ""
+            artist: ""
+            playlist: ""
+
+  # Sensor obecności tagu
+  - platform: template
+    name: "=Tag="
+    id: is_tag
+    device_class: vibration
+    entity_category: DIAGNOSTIC
+    disabled_by_default: true
+
+  # Sensor trybu odczytu
+  - platform: template
+    name: "=Reading="
+    id: txt_reading
+    device_class: running
+    entity_category: DIAGNOSTIC
+    lambda: |-
+      if ( !id(pn532_board).is_writing() ) {
+        return true;
+      } else {
+        return false;
+      }
+
+  # Sensor trybu zapisu
+  - platform: template
+    name: "=Writing="
+    id: txt_writing
+    device_class: running
+    entity_category: DIAGNOSTIC
+    lambda: |-
+      if ( id(pn532_board).is_writing() ) {
+        return true;
+      } else {
+        return false;
+      }
+
+# ============================================================
+# WYJŚCIA - LED
+# ============================================================
+
+output:
+  - platform: gpio
+    pin: ${pin_led}
+    inverted: true
+    id: led1_gpio
+
+light:
+  - platform: binary
+    id: led1
+    output: led1_gpio
+    restore_mode: ALWAYS_OFF
+    effects:
+      - strobe:
+          name: TagWrite
+          colors:
+            - state: true
+              duration: 250ms
+            - state: false
+              duration: 50ms
+
+# ============================================================
+# SKRYPTY
+# ============================================================
+
+script:
+  # Krótkie mignięcie - potwierdzenie akcji
+  - id: led_blink
+    then:
+    - light.turn_off: led1
+    - light.turn_on:
+        id: led1
+        flash_length: 100ms
+
+  # Dwa mignięcia - tag odczytany
+  - id: led_ok
+    then:
+    - light.turn_off: led1
+    - light.turn_on:
+        id: led1
+        flash_length: 50ms
+    - delay: 100ms
+    - light.turn_on:
+        id: led1
+        flash_length: 50ms
+
+  # Trzy narastające mignięcia - sukces zapisu
+  - id: led_success
+    then:
+    - light.turn_off: led1
+    - light.turn_on:
+        id: led1
+        flash_length: 200ms
+    - delay: 250ms
+    - light.turn_on:
+        id: led1
+        flash_length: 200ms
+    - delay: 250ms
+    - light.turn_on:
+        id: led1
+        flash_length: 500ms
+
+  # Ciągłe miganie - tryb zapisu
+  - id: led_tagwrite
+    then:
+    - light.turn_on:
+        id: led1
+        effect: TagWrite
+
+  # Timeout oczekiwania
+  - id: wait_input
+    then:
+      - delay: 3s
+      - text_sensor.template.publish:
+          id: status
+          state: "Waiting for input"
+
+  # Kopiowanie danych z tagu do pól tekstowych
+  - id: set_tag
+    then:
+      - text.set:
+          id: playlist_artist
+          value: !lambda |-
+            return id(artist);
+      - delay: 10ms
+      - text.set:
+          id: playlist_info
+          value: !lambda |-
+            return id(playlist);
+      - delay: 10ms
+      - text.set:
+          id: playlist_uri
+          value: !lambda |-
+            ESP_LOGD("tagtuner", "URI NDEF");
+            return id(uri);
+
+  # Główny skrypt - wysyłanie zdarzeń do Home Assistant
+  - id: tagtuner_event
+    parameters:
+      action: string
+      uid: string
+      uri: string
+      artist: string
+      playlist: string
+    mode: queued
+    max_runs: 3
+    then:
+      - event.trigger:
+          id: tagtuner_action
+          event_type: !lambda return action;
+      - homeassistant.event:
+          event: esphome.tagtuner
+          data:
+            magic: ${magic}
+            action: !lambda return action;
+            uid: !lambda return uid;
+            uri: !lambda return uri;
+            artist: !lambda return artist;
+            playlist: !lambda return playlist;
+
+# ============================================================
+# ENKODER OBROTOWY
+# ============================================================
+
+sensor:
+  - platform: rotary_encoder
+    id: rotary
+    pin_a: ${pin_encoder_clk}
+    pin_b: ${pin_encoder_dt}
+    resolution: 2
+    restore_mode: ALWAYS_ZERO
+    on_clockwise:
+      - text_sensor.template.publish:
+          id: status
+          state: "Volume up"
+      - script.execute:
+          id: tagtuner_event
+          action: "volumeUp"
+          uid: ""
+          uri: ""
+          artist: ""
+          playlist: ""
+      - script.execute: led_blink
+    on_anticlockwise:
+      - text_sensor.template.publish:
+          id: status
+          state: "Volume down"
+      - script.execute:
+          id: tagtuner_event
+          action: "volumeDown"
+          uid: ""
+          uri: ""
+          artist: ""
+          playlist: ""
+      - script.execute: led_blink
+
+# ============================================================
+# POLA TEKSTOWE - Do zapisu tagów
+# ============================================================
+
+text:
+  - platform: template
+    id: playlist_artist
+    name: "Playlist artist"
+    icon: mdi:account-music
+    optimistic: true
+    min_length: 0
+    max_length: 50
+    mode: text
+    initial_value: " "
+
+  - platform: template
+    id: playlist_info
+    name: "Playlist name or album title"
+    icon: mdi:playlist-music
+    optimistic: true
+    min_length: 0
+    max_length: 100
+    mode: text
+    initial_value: " "
+
+  - platform: template
+    id: playlist_uri
+    name: "Playlist URI"
+    icon: mdi:link-variant
+    optimistic: true
+    min_length: 0
+    max_length: 255
+    mode: text
+    initial_value: " "
+
+# ============================================================
+# DIAGNOSTYKA
+# ============================================================
+
+text_sensor:
+  - platform: template
+    id: status
+    name: "Status"
+    icon: mdi:ladybug
+    entity_category: DIAGNOSTIC
+    on_value:
+      if:
+        condition:
+          lambda: 'return id(status).state != "Waiting for input";'
+        then:
+        - script.stop: wait_input
+        - script.execute: wait_input
+
+# ============================================================
+# PRZYCISKI W HOME ASSISTANT
+# ============================================================
+
+button:
+  - platform: restart
+    name: "Restart"
+    id: btn_restart
+    entity_category: DIAGNOSTIC
+
+  - platform: template
+    name: Cancel writing 
+    id: btn_cancel_writing
+    icon: "mdi:broadcast-off"
+    on_press:
+      then:
+      - lambda: 'id(pn532_board).read_mode();'
+      - wait_until:
+          timeout: 30s
+          condition:
+            not:
+              pn532.is_writing:
+      - delay: 5ms
+      - text_sensor.template.publish:
+          id: status
+          state: "Cancel writing tag"
+      - script.execute: led_ok
+
+  - platform: template
+    name: Erase Tag
+    id: btn_erase_tag
+    icon: "mdi:nfc-search-variant"
+    on_press:
+      then:
+      - script.execute: led_tagwrite
+      - text.set:
+          id: playlist_artist
+          value: ''
+      - text.set:
+          id: playlist_info
+          value: ''
+      - text.set:
+          id: playlist_uri
+          value: ''
+      - lambda: 'id(pn532_board).format_mode();'
+      - text_sensor.template.publish:
+          id: status
+          state: "Place tag"
+      - wait_until:
+          timeout: 30s
+          condition:
+            not:
+              pn532.is_writing:
+      - if:
+          condition:
+            pn532.is_writing:
+          then:
+          - lambda: 'id(pn532_board).read_mode();'
+      - text_sensor.template.publish:
+          id: status
+          state: "Finished erasing tag"
+      - script.execute: led_success
+
+  - platform: template
+    name: Write Tag
+    id: btn_write_tag
+    icon: "mdi:cast-audio-variant"
+    on_press:
+      then:
+      - script.execute: led_tagwrite
+      - lambda: |-
+          auto message = new nfc::NdefMessage();
+          message->add_text_record("TagTuner");
+          std::string uri = "";
+          std::string artist = "artist/";
+          std::string playlist = "playlist/";
+          uri += id(playlist_uri).state;
+          artist += id(playlist_artist).state;
+          playlist += id(playlist_info).state;
+          if ( artist != "" ) {
+            message->add_text_record(artist);
+          }
+          if ( playlist != "" ) {
+            message->add_text_record(playlist);
+          }
+          if ( uri != "" ) {
+            message->add_uri_record(uri);
+          }
+          ESP_LOGD("ndef", "Writing payload: %s", uri.c_str());
+          id(pn532_board).write_mode(message);
+      - text_sensor.template.publish:
+          id: status
+          state: "Place tag"
+      - wait_until:
+          timeout: 30s
+          condition:
+            not:
+              pn532.is_writing:
+      - if:
+          condition:
+            pn532.is_writing:
+          then:
+          - lambda: 'id(pn532_board).read_mode();'
+      - text_sensor.template.publish:
+          id: status
+          state: "Finished writing tag"
+      - script.execute: led_success
+
+# ============================================================
+# ZMIENNE GLOBALNE
+# ============================================================
+
+globals:
+  - id: artist
+    type: std::string
+  - id: playlist
+    type: std::string
+  - id: uri
+    type: std::string
+
+# ============================================================
+# ZDARZENIA
+# ============================================================
+
+event:
+  - platform: template
+    id: tagtuner_action
+    name: "Action"
+    event_types:
+      - clickTriple
+      - clickDouble
+      - clickLong
+      - clickSingle
+      - volumeUp
+      - volumeDown
+      - tagRemoved
+      - tagScanned
+
+# ============================================================
+# CZYTNIK NFC - PN532
+# ============================================================
+
+pn532_i2c:
+  - id: pn532_board
+    i2c_id: bus_i2c
+    update_interval: 350ms
+    
+    on_tag_removed:
+      - binary_sensor.template.publish:
+          id: is_tag
+          state: false
+      - text_sensor.template.publish:
+          id: status
+          state: "Tag removed"
+      - script.execute:
+          id: tagtuner_event
+          action: "tagRemoved"
+          uid: !lambda 'return x;'
+          uri: ""
+          artist: ""
+          playlist: ""
+      - script.execute: led_blink
+
+    on_tag:
+      - binary_sensor.template.publish:
+          id: is_tag
+          state: true
+      - text_sensor.template.publish:
+          id: status
+          state: !lambda 'return "Tag "+x;'
+      - lambda: |-
+          id(playlist)="";
+          id(artist)="";
+          id(uri)="";
+          if (tag.has_ndef_message()) {
+            for (auto &record : tag.get_ndef_message()->get_records() ) {
+              std::string payload = record->get_payload();
+              std::string type = record->get_type();
+
+              if ( payload.substr(0, 7) == "artist/" ) {
+                id(artist)=payload.substr(7);
+              }
+              else if ( payload.substr(0, 9) == "playlist/" ) {
+                id(playlist)=payload.substr(9);
+              }
+              else if (type == "U"
+              && payload.substr(0, 20) != "https://mb.senic.com"
+              && payload.substr(0, 23) != "https://www.philips.com"
+              ) {
+                id(uri)=payload;
+              }
+
+            }
+          }
+      - if:
+          condition:
+            lambda: 'return id(uri) == "" ;'
+          then:
+            - text_sensor.template.publish:
+                id: status
+                state: "Plain UID tag"
+            - homeassistant.tag_scanned: !lambda |-
+                ESP_LOGD("tagtuner", "No TagTuner NDEF, using UID");
+                return x;
+          else:
+            - script.execute:
+                id: tagtuner_event
+                action: "tagScanned"
+                uid: !lambda 'return x;'
+                uri: !lambda 'return id(uri);'
+                artist: !lambda 'return id(artist);'
+                playlist: !lambda 'return id(playlist);'
+            - script.execute: set_tag
+      - script.execute: led_ok

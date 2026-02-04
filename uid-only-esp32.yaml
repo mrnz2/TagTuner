@@ -1,0 +1,275 @@
+# ============================================================
+# TagTuner UID-Only for ESP32-WROOM-32E
+# Only scans tag UID and sends to Home Assistant
+# ============================================================
+
+substitutions:
+  # ──────────────────────────────────────────────────────────
+  # USTAWIENIA URZĄDZENIA
+  # ──────────────────────────────────────────────────────────
+  name: "tagtuner-esp32"
+  friendly_name: "TagTuner ESP32"
+  
+  # ──────────────────────────────────────────────────────────
+  # KONFIGURACJA PINÓW - ESP32-WROOM-32E DevKit
+  # ──────────────────────────────────────────────────────────
+  #
+  #  ESP32-WROOM-32E DevKit (30/38 pin)
+  #
+  #             ┌───────────┐
+  #       EN  ──┤           ├── GPIO23
+  #       VP  ──┤           ├── GPIO22 (SCL)
+  #       VN  ──┤           ├── GPIO1 (TX)
+  #    GPIO34 ──┤           ├── GPIO3 (RX)
+  #    GPIO35 ──┤           ├── GPIO21 (SDA)
+  #    GPIO32 ──┤           ├── GND
+  #    GPIO33 ──┤           ├── GPIO19
+  #    GPIO25 ──┤           ├── GPIO18
+  #    GPIO26 ──┤    USB    ├── GPIO5
+  #    GPIO27 ──┤           ├── GPIO17
+  #    GPIO14 ──┤           ├── GPIO16
+  #    GPIO12 ──┤           ├── GPIO4
+  #       GND ──┤           ├── GPIO0
+  #    GPIO13 ──┤           ├── GPIO2 (LED)
+  #        D2 ──┤           ├── GPIO15
+  #        D3 ──┤           ├── D1
+  #       CMD ──┤           ├── D0
+  #       5V  ──┤           ├── CLK
+  #       GND ──┤           ├── 3V3
+  #             └───────────┘
+  #
+  # ──────────────────────────────────────────────────────────
+  
+  # I2C - Czytnik NFC PN532 (standardowe piny ESP32)
+  pin_i2c_sda: "21"             # GPIO21 - dane I2C
+  pin_i2c_scl: "22"             # GPIO22 - zegar I2C
+  
+  # Enkoder obrotowy HW-040
+  pin_encoder_clk: "25"         # GPIO25 - sygnał CLK (obrót)
+  pin_encoder_dt: "26"          # GPIO26 - sygnał DT (kierunek)
+  pin_encoder_sw: "27"          # GPIO27 - przycisk (switch)
+  
+  # LED sygnalizacyjny
+  pin_led: "2"                  # GPIO2 - wbudowany LED (na większości devkitów)
+
+# ============================================================
+# KONFIGURACJA ESPHOME
+# ============================================================
+
+esphome:
+  name: "${name}"
+  friendly_name: ${friendly_name}
+  min_version: 2024.1.0
+  name_add_mac_suffix: true
+
+  on_boot:
+    priority: -100
+    then:
+    - light.turn_on:
+        id: led1
+        flash_length: 500ms
+    - wait_until:
+        condition:
+          api.connected:
+        timeout: 20s
+    - text_sensor.template.publish:
+        id: status
+        state: "Ready"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+# ============================================================
+# KOMUNIKACJA
+# ============================================================
+
+i2c:
+  id: bus_i2c
+  sda: ${pin_i2c_sda}
+  scl: ${pin_i2c_scl}
+  scan: False
+  frequency: 100kHz
+  timeout: 13ms
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ap:
+
+improv_serial:
+
+esp32_ble:
+  name: ${name}
+
+esp32_improv:
+  authorizer: toggle
+
+# ============================================================
+# WEJŚCIA - Przycisk i sensory
+# ============================================================
+
+binary_sensor:
+  # Przycisk enkodera - obsługa wielu typów kliknięć
+  - platform: gpio
+    id: toggle
+    pin:
+      number: ${pin_encoder_sw}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+    # Triple click
+    - timing:
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+      then:
+        - script.execute: led_blink
+        - homeassistant.event:
+            event: esphome.tagtuner_button
+            data:
+              action: "triple"
+    # Double click
+    - timing:
+        - ON for at most 1s
+        - OFF for at most 0.25s
+        - ON for at most 1s
+        - OFF for at least 0.25s
+      then:
+        - script.execute: led_blink
+        - homeassistant.event:
+            event: esphome.tagtuner_button
+            data:
+              action: "double"
+    # Long press (0.5s - 2s)
+    - timing:
+        - ON for 0.5s to 2s
+        - OFF for at least 50ms
+      then:
+        - script.execute: led_blink
+        - homeassistant.event:
+            event: esphome.tagtuner_button
+            data:
+              action: "long"
+    # Single click
+    - timing:
+        - ON for at most 0.5s
+        - OFF for at least 260ms
+      then:
+        - script.execute: led_blink
+        - homeassistant.event:
+            event: esphome.tagtuner_button
+            data:
+              action: "single"
+
+  # Sensor obecności tagu
+  - platform: template
+    name: "Tag Present"
+    id: is_tag
+    device_class: occupancy
+
+# ============================================================
+# WYJŚCIA - LED
+# ============================================================
+
+output:
+  - platform: gpio
+    pin: ${pin_led}
+    id: led1_gpio
+
+light:
+  - platform: binary
+    id: led1
+    output: led1_gpio
+    restore_mode: ALWAYS_OFF
+
+# ============================================================
+# SKRYPTY
+# ============================================================
+
+script:
+  - id: led_blink
+    then:
+    - light.turn_on:
+        id: led1
+        flash_length: 100ms
+
+# ============================================================
+# ENKODER OBROTOWY
+# ============================================================
+
+sensor:
+  - platform: rotary_encoder
+    id: rotary
+    pin_a: ${pin_encoder_clk}
+    pin_b: ${pin_encoder_dt}
+    resolution: 2
+    restore_mode: ALWAYS_ZERO
+    on_clockwise:
+      - homeassistant.event:
+          event: esphome.tagtuner_volume
+          data:
+            action: "up"
+      - script.execute: led_blink
+    on_anticlockwise:
+      - homeassistant.event:
+          event: esphome.tagtuner_volume
+          data:
+            action: "down"
+      - script.execute: led_blink
+
+# ============================================================
+# DIAGNOSTYKA
+# ============================================================
+
+text_sensor:
+  - platform: template
+    id: status
+    name: "Status"
+    icon: mdi:ladybug
+    entity_category: DIAGNOSTIC
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: DIAGNOSTIC
+
+# ============================================================
+# CZYTNIK NFC - PN532
+# ============================================================
+
+pn532_i2c:
+  - id: pn532_board
+    i2c_id: bus_i2c
+    update_interval: 350ms
+    
+    on_tag_removed:
+      - binary_sensor.template.publish:
+          id: is_tag
+          state: false
+      - text_sensor.template.publish:
+          id: status
+          state: "Tag removed"
+      - script.execute: led_blink
+
+    on_tag:
+      - binary_sensor.template.publish:
+          id: is_tag
+          state: true
+      - text_sensor.template.publish:
+          id: status
+          state: !lambda 'return "Tag: " + x;'
+      # Wysyła standardowe zdarzenie HA tag_scanned
+      - homeassistant.tag_scanned: !lambda 'return x;'
+      - script.execute: led_blink
