@@ -21,7 +21,7 @@ Prosty czytnik tagów NFC z enkoderem obrotowym dla Home Assistant.
 
 ### Sprzęt
 
-| Element | Opis |
+| Element | Opis | s
 |---------|------|
 | ESP32-C3 SuperMini | Mikrokontroler (lub ESP32-WROOM-32E) |
 | PN532 NFC | Czytnik NFC z interfejsem I2C |
