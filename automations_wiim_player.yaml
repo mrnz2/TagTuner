@@ -1,0 +1,91 @@
+# ============================================================
+# Automatyzacje TagTuner C3 → WiiM Player
+# Na podstawie zdarzeń z esp32-c3.yaml
+#
+# Instalacja: skopiuj do automations.yaml lub utwórz w
+# Ustawienia → Automatyzacje i akcje → Nowa automatyzacja → …
+# (tryb YAML) i wklej zawartość jednej z poniższych automatyzacji.
+# ============================================================
+
+---
+# 1) Zeskanowanie karty → odtwarzaj utwór
+# Trigger: tag_scanned (dowolna karta przy czytniku TagTuner)
+# Opcjonalnie: dodaj condition z device_id, żeby tylko ten czytnik
+id: tagtuner_scan_play_wiim
+alias: "TagTuner – karta → odtwarzaj (WiiM)"
+description: "Po zeskanowaniu karty odtwarza utwór na WiiM Player"
+trigger:
+  - trigger: event
+    event_type: tag_scanned
+    # Opcjonalnie – tylko gdy skanuje TagTuner C3 (device_id z Narzędzi deweloperskich → Zdarzenia):
+    # event_data:
+    #   device_id: "TWOJ_DEVICE_ID_CZYTNIKA"
+condition: []
+action:
+  - service: media_player.play_media
+    target:
+      entity_id: media_player.wiimplayer
+    data:
+      media_content_id: >-
+        media-source://media_source/local/music/Emiliana
+        Torrini/01-emiliana_torrini-fireheads.mp3
+      media_content_type: "music"
+mode: single
+
+---
+# 2) Enkoder → głośniej / ciszej (jedna automatyzacja)
+id: tagtuner_volume_wiim
+alias: "TagTuner – enkoder → głośność (WiiM)"
+description: "Obrót enkodera w górę/w dół zmienia głośność WiiM"
+trigger:
+  - trigger: event
+    event_type: esphome.tagtuner_volume
+    event_data:
+      action: "up"
+  - trigger: event
+    event_type: esphome.tagtuner_volume
+    event_data:
+      action: "down"
+condition: []
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.action == 'up' }}"
+        sequence:
+          - service: media_player.volume_up
+            target:
+              entity_id: media_player.wiimplayer
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.action == 'down' }}"
+        sequence:
+          - service: media_player.volume_down
+            target:
+              entity_id: media_player.wiimplayer
+mode: single
+
+---
+# 4) Przycisk (single / double / triple) → play/pause (toggle)
+id: tagtuner_button_play_pause_wiim
+alias: "TagTuner – przycisk → play/pause (WiiM)"
+description: "Single, double i triple klik → toggle odtwarzania WiiM"
+trigger:
+  - trigger: event
+    event_type: esphome.tagtuner_button
+    event_data:
+      action: "single"
+  - trigger: event
+    event_type: esphome.tagtuner_button
+    event_data:
+      action: "double"
+  - trigger: event
+    event_type: esphome.tagtuner_button
+    event_data:
+      action: "triple"
+condition: []
+action:
+  - service: media_player.toggle
+    target:
+      entity_id: media_player.wiimplayer
+mode: single

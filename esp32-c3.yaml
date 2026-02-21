@@ -1,49 +1,39 @@
-# ============================================================
-# TagTuner UID-Only for ESP32-C3 SuperMini
-# Only scans tag UID and sends to Home Assistant
-# ============================================================
-
-substitutions:
-  # ──────────────────────────────────────────────────────────
-  # USTAWIENIA URZĄDZENIA
-  # ──────────────────────────────────────────────────────────
-  name: "tagtuner-c3"
-  friendly_name: "TagTuner C3"
-  
   # ──────────────────────────────────────────────────────────
   # KONFIGURACJA PINÓW - ESP32-C3 SuperMini
   # ──────────────────────────────────────────────────────────
   #
-  #         USB-C
-  #      ┌─────────┐
-  #      │  ┌───┐  │
-  #   5V │  │USB│  │ GND
-  #  GND │  └───┘  │ 3V3
-  #  GP4 │         │ GP2
-  #  GP5 │         │ GP3
-  #  GP6 │         │ GP10
-  #  GP7 │         │ GP9
-  #  GP8 │  (LED)  │ GP8
-  #  GP9 │         │ GP21 (TX)
-  # GP10 │         │ GP20 (RX)
-  #      └─────────┘
+  #  Lewa kolumna (header)   |   Prawa kolumna (header)
+  #  GPIO5  FSPIWP, MISO     |   5V
+  #  GPIO6  SPI FLASH – NIE UŻYWAĆ |   GND
+  #  GPIO7  SPI FLASH – NIE UŻYWAĆ |   3.3V
+  #  GPIO8  BUILTIN LED      |   GPIO4  SDA I2C, ADC1_4
+  #  GPIO9  encoder DT (pull-up!)  |   GPIO3  encoder SW
+  #  GPIO10 encoder CLK      |   GPIO2  FSPIQ, BOOT, ADC1_2
+  #  GPIO20 TXD0             |   GPIO1  ADC1_1
+  #  GPIO21 RXD0             |   GPIO0  ADC1_0
   #
   # ──────────────────────────────────────────────────────────
-  
-  # I2C - Czytnik NFC PN532
-  pin_i2c_sda: "4"          # GPIO4 - dane I2C
-  pin_i2c_scl: "5"          # GPIO5 - zegar I2C
-  
-  # Enkoder obrotowy HW-040
-  pin_encoder_clk: "6"      # GPIO6 - sygnał CLK (obrót)
-  pin_encoder_dt: "7"       # GPIO7 - sygnał DT (kierunek)
-  pin_encoder_sw: "3"       # GPIO3 - przycisk (switch)
-  
-  # LED sygnalizacyjny
-  pin_led: "8"              # GPIO8 - wbudowany LED (active LOW)
-
+  # ============================================================
+# TagTuner UID-Only for ESP32-C3 SuperMini (POPRAWIONY)
 # ============================================================
-# KONFIGURACJA ESPHOME
+
+substitutions:
+  name: "tagtuner-c3"
+  friendly_name: "TagTuner C3"
+
+  # ───────── PINY – GRUPOWANIE STRONAMI ─────────
+  # LEWA STRONA PŁYTKI → PN532 (I2C)
+  pin_i2c_sda: "4"     # GPIO4
+  pin_i2c_scl: "5"     # GPIO5
+
+  # ENKODER – GPIO9/10 (9=strapping, OK z pull-up; NIE używać 6/7 = SPI Flash!)
+  pin_encoder_clk: "10"  # GPIO10
+  pin_encoder_dt: "9"    # GPIO9 (pull-up wewn. lub w enkoderze)
+  pin_encoder_sw: "3"    # GPIO3
+
+  # LED
+  pin_led: "8"        # GPIO8 (built-in LED, active LOW)
+
 # ============================================================
 
 esphome:
@@ -55,21 +45,21 @@ esphome:
   on_boot:
     priority: -100
     then:
-    - light.turn_on:
-        id: led1
-        flash_length: 500ms
-    - wait_until:
-        condition:
-          api.connected:
-        timeout: 20s
-    - text_sensor.template.publish:
-        id: status
-        state: "Ready"
+      - light.turn_on:
+          id: led1
+          flash_length: 500ms
+      - wait_until:
+          condition:
+            api.connected:
+          timeout: 20s
+      - text_sensor.template.publish:
+          id: status
+          state: "Ready"
 
 esp32:
   board: esp32-c3-devkitm-1
   framework:
-    type: arduino
+    type: arduino   # <<< KLUCZOWE (Improv działa tylko na Arduino)
 
 logger:
   level: DEBUG
@@ -82,47 +72,40 @@ i2c:
   id: bus_i2c
   sda: ${pin_i2c_sda}
   scl: ${pin_i2c_scl}
-  scan: False
+  scan: false
   frequency: 100kHz
-  timeout: 13ms
 
-# Enable Home Assistant API
 api:
   encryption:
-    key: "GM4MH8nM/dA9hGvfCw50nAiFwwx0vtxBeiY9aP4DVCk="
+    key: "30sHFNxlCElAfv41LY9yQlPgOS3rKLfjR150gcPuLXo="
 
 ota:
   - platform: esphome
-    password: "d8ec2a61e8a1f2a47c4fd707dca36a1a"
+    password: "dc5897bdc4d59854c65db6723d62105a"
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  manual_ip: 
-    static_ip: 192.168.0.39
+  manual_ip:
+    static_ip: 192.168.0.41
     gateway: 192.168.0.1
     subnet: 255.255.255.0
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
-    ssid: "Nfc Fallback Hotspot"
-    password: "EBAPbDhcVH37"
+    ssid: "Czytnikkart Fallback"
+    password: "GVr80y9d6ODu"
 
 captive_portal:
 
 improv_serial:
 
-esp32_ble:
-  name: ${name}
-
 esp32_improv:
   authorizer: toggle
 
 # ============================================================
-# WEJŚCIA - Przycisk i sensory
+# WEJŚCIA
 # ============================================================
 
 binary_sensor:
-  # Przycisk enkodera - obsługa wielu typów kliknięć
   - platform: gpio
     id: toggle
     pin:
@@ -132,60 +115,58 @@ binary_sensor:
         input: true
         pullup: true
     on_multi_click:
-    # Triple click
-    - timing:
-        - ON for at most 1s
-        - OFF for at most 0.25s
-        - ON for at most 1s
-        - OFF for at most 0.25s
-        - ON for at most 1s
-      then:
-        - script.execute: led_blink
-        - homeassistant.event:
-            event: esphome.tagtuner_button
-            data:
-              action: "triple"
-    # Double click
-    - timing:
-        - ON for at most 1s
-        - OFF for at most 0.25s
-        - ON for at most 1s
-        - OFF for at least 0.25s
-      then:
-        - script.execute: led_blink
-        - homeassistant.event:
-            event: esphome.tagtuner_button
-            data:
-              action: "double"
-    # Long press (0.5s - 2s)
-    - timing:
-        - ON for 0.5s to 2s
-        - OFF for at least 50ms
-      then:
-        - script.execute: led_blink
-        - homeassistant.event:
-            event: esphome.tagtuner_button
-            data:
-              action: "long"
-    # Single click
-    - timing:
-        - ON for at most 0.5s
-        - OFF for at least 260ms
-      then:
-        - script.execute: led_blink
-        - homeassistant.event:
-            event: esphome.tagtuner_button
-            data:
-              action: "single"
+      - timing:
+          - ON for at most 1s
+          - OFF for at most 0.25s
+          - ON for at most 1s
+          - OFF for at most 0.25s
+          - ON for at most 1s
+        then:
+          - script.execute: led_blink
+          - homeassistant.event:
+              event: esphome.tagtuner_button
+              data:
+                action: "triple"
 
-  # Sensor obecności tagu
+      - timing:
+          - ON for at most 1s
+          - OFF for at most 0.25s
+          - ON for at most 1s
+          - OFF for at least 0.25s
+        then:
+          - script.execute: led_blink
+          - homeassistant.event:
+              event: esphome.tagtuner_button
+              data:
+                action: "double"
+
+      - timing:
+          - ON for 0.5s to 2s
+          - OFF for at least 50ms
+        then:
+          - script.execute: led_blink
+          - homeassistant.event:
+              event: esphome.tagtuner_button
+              data:
+                action: "long"
+
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at least 260ms
+        then:
+          - script.execute: led_blink
+          - homeassistant.event:
+              event: esphome.tagtuner_button
+              data:
+                action: "single"
+
   - platform: template
     name: "Tag Present"
     id: is_tag
     device_class: occupancy
 
 # ============================================================
-# WYJŚCIA - LED
+# LED
 # ============================================================
 
 output:
@@ -207,12 +188,36 @@ light:
 script:
   - id: led_blink
     then:
-    - light.turn_on:
-        id: led1
-        flash_length: 100ms
+      - light.turn_on:
+          id: led1
+          flash_length: 100ms
+
+  - id: led_blink_success
+    then:
+      - light.turn_on:
+          id: led1
+          flash_length: 120ms
+      - delay: 80ms
+      - light.turn_on:
+          id: led1
+          flash_length: 120ms
+
+  - id: led_blink_error
+    then:
+      - light.turn_on:
+          id: led1
+          flash_length: 60ms
+      - delay: 70ms
+      - light.turn_on:
+          id: led1
+          flash_length: 60ms
+      - delay: 70ms
+      - light.turn_on:
+          id: led1
+          flash_length: 60ms
 
 # ============================================================
-# ENKODER OBROTOWY
+# ENKODER
 # ============================================================
 
 sensor:
@@ -252,14 +257,14 @@ button:
     entity_category: DIAGNOSTIC
 
 # ============================================================
-# CZYTNIK NFC - PN532
+# PN532 NFC
 # ============================================================
 
 pn532_i2c:
   - id: pn532_board
     i2c_id: bus_i2c
     update_interval: 350ms
-    
+
     on_tag_removed:
       - binary_sensor.template.publish:
           id: is_tag
@@ -276,6 +281,11 @@ pn532_i2c:
       - text_sensor.template.publish:
           id: status
           state: !lambda 'return "Tag: " + x;'
-      # Wysyła standardowe zdarzenie HA tag_scanned
-      - homeassistant.tag_scanned: !lambda 'return x;'
-      - script.execute: led_blink
+      - if:
+          condition:
+            lambda: 'return x.size() >= 8;'
+          then:
+            - homeassistant.tag_scanned: !lambda 'return x;'
+            - script.execute: led_blink_success
+          else:
+            - script.execute: led_blink_error
